@@ -5,7 +5,7 @@ const axios = require('axios');
 const { XMLParser } = require('fast-xml-parser');
 const { engine } = require('express-handlebars');
 
-// ✅ FIXED: Path adjusted to find product.js directly in your main root directory
+// ✅ Paths adjusted to find files directly in your main root directory
 const Product = require('./product'); 
 const { trackPrices } = require('./tracker');
 require('./cronJob'); 
@@ -14,7 +14,8 @@ const app = express();
 
 app.engine('handlebars', engine());
 app.set('view engine', 'handlebars');
-app.set('views', './views');
+// ✅ FIXED: Look directly in the root directory where dashboard.handlebars is sitting
+app.set('views', './'); 
 
 // Dynamically read from Render's Environment Variables setting panel
 const mongoURI = process.env.MONGO_URI;
