@@ -39,10 +39,24 @@ async function getSitemapUrls() {
       const jsonObj = parser.parse(response.data);
       const urlEntries = jsonObj?.urlset?.url;
       const entries = Array.isArray(urlEntries) ? urlEntries : [urlEntries].filter(Boolean);
-      productUrls = productUrls.concat(entries.map(item => item.loc));
+      productUrls = productUrls.concat(entries.map(item => item?.loc));
     }
 
-    return productUrls;
+    // A "product" sitemap can still carry stray junk in practice (an
+    // occasional homepage/collection entry, blank <loc>, or the same URL
+    // listed twice across locale variants). Filter down to real,
+    // deduplicated /products/ links only - anything else (like the bare
+    // homepage) has no og:title/price and will only ever fail the scrape.
+    const PRODUCT_URL_PATTERN = /^https:\/\/www\.bestbuylighting\.com\.au\/products\/[^/]+\/?$/;
+    const cleanedUrls = [...new Set(
+      productUrls
+        .filter(loc => typeof loc === 'string')
+        .map(loc => loc.trim())
+        .filter(loc => PRODUCT_URL_PATTERN.test(loc))
+    )];
+
+    console.log(`🧹 Sitemap yielded ${productUrls.length} raw entries -> ${cleanedUrls.length} valid unique product URLs.`);
+    return cleanedUrls;
   } catch (error) {
     console.error("❌ Cron sitemap pull failed:", error.message);
     return [];
