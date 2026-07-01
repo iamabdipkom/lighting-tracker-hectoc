@@ -12,9 +12,9 @@ require('./cronJob');
 
 const app = express();
 
-app.engine('handlebars', engine());
+// ✅ FIXED: Configured with defaultLayout: false to bypass looking for a layouts folder completely
+app.engine('handlebars', engine({ defaultLayout: false }));
 app.set('view engine', 'handlebars');
-// ✅ FIXED: Look directly in the root directory where dashboard.handlebars is sitting
 app.set('views', './'); 
 
 // Dynamically read from Render's Environment Variables setting panel
