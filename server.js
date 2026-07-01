@@ -42,10 +42,12 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, async () => {
   console.log(`24/7 Cloud Tracker Dashboard initializing on port ${PORT}`);
   
-  // ✅ FIXED: Added your live target product links perfectly here
+  // Verified live product URLs (the old ones 404'd: the Radam link had a stale
+  // "/collections/new-arrivals/" prefix in front of "/products/", and product
+  // id 2483 for the Yoyo light doesn't exist - the real id is 2475).
   const manualUrls = [
-    'https://www.bestbuylighting.com.au/collections/new-arrivals/products/telbix-radam-8-pendant-light',
-    'https://www.bestbuylighting.com.au/products/2483-yoyo-21-light-gold'
+    'https://www.bestbuylighting.com.au/products/telbix-radam-8-pendant-light',
+    'https://www.bestbuylighting.com.au/products/2475-yoyo-1-light-gold'
   ];
 
   console.log(`🚀 Bypassing sitemap wall. Initializing direct scraping cycle for ${manualUrls.length} items...`);
