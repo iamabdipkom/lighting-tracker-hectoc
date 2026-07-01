@@ -6,13 +6,43 @@ const { trackPrices } = require('./tracker');
 const axios = require('axios');
 const { XMLParser } = require('fast-xml-parser');
 
-// Automatically pulls store sitemap items for the scheduled cron cycles
+// Automatically pulls store sitemap items for the scheduled cron cycles.
+// Shopify stores publish a top-level sitemap INDEX at /sitemap.xml that links out
+// to separate sitemaps per content type (products, collections, pages, blogs) with
+// store-specific filenames - hardcoding "sitemap_products_1.xml" isn't safe. Instead
+// we read the index first, then follow every "sitemap_products*" entry it lists.
 async function getSitemapUrls() {
+  const parser = new XMLParser();
+  const requestOptions = {
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; LightingTrackerBot/1.0)' },
+    timeout: 15000
+  };
+
   try {
-    const response = await axios.get('https://www.bestbuylighting.com.au/sitemap_products_1.xml');
-    const parser = new XMLParser();
-    const jsonObj = parser.parse(response.data);
-    return jsonObj.urlset.url.map(item => item.loc);
+    const indexResponse = await axios.get('https://www.bestbuylighting.com.au/sitemap.xml', requestOptions);
+    const indexObj = parser.parse(indexResponse.data);
+
+    const sitemapEntries = indexObj?.sitemapindex?.sitemap;
+    const allSitemaps = Array.isArray(sitemapEntries) ? sitemapEntries : [sitemapEntries].filter(Boolean);
+    const productSitemapUrls = allSitemaps
+      .map(entry => entry.loc)
+      .filter(loc => loc && loc.includes('sitemap_products'));
+
+    if (productSitemapUrls.length === 0) {
+      console.error('❌ Cron sitemap pull found no product sitemaps listed in the index.');
+      return [];
+    }
+
+    let productUrls = [];
+    for (const sitemapUrl of productSitemapUrls) {
+      const response = await axios.get(sitemapUrl, requestOptions);
+      const jsonObj = parser.parse(response.data);
+      const urlEntries = jsonObj?.urlset?.url;
+      const entries = Array.isArray(urlEntries) ? urlEntries : [urlEntries].filter(Boolean);
+      productUrls = productUrls.concat(entries.map(item => item.loc));
+    }
+
+    return productUrls;
   } catch (error) {
     console.error("❌ Cron sitemap pull failed:", error.message);
     return [];
