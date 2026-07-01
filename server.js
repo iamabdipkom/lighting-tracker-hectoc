@@ -1,8 +1,12 @@
 require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
+const axios = require('axios');
+const { XMLParser } = require('fast-xml-parser');
 const { engine } = require('express-handlebars');
-const Product = require('./models/Product');
+
+// Linux Casing Fixes: Lowercase paths to match common file-system uploads safely
+const Product = require('./models/product'); 
 const { trackPrices } = require('./tracker');
 require('./cronJob'); 
 
@@ -12,45 +16,52 @@ app.engine('handlebars', engine());
 app.set('view engine', 'handlebars');
 app.set('views', './views');
 
-// 👇 EXPLICIT STRIPPED LINK WITH NEW CREDENTIALS 👇
-// IMPORTANT: Look at the text "cluster0.xxxxx" below. Replace ONLY those specific characters with your real cluster ID from your Atlas page!
-const mongoURI = "mongodb+srv://trackeradmin:Lighting123456@cluster0.zwuta1x.mongodb.net/?appName=Cluster0"
-
-
+// Dynamically read from Render's Environment Variables setting panel
+const mongoURI = process.env.MONGO_URI;
 
 mongoose.connect(mongoURI)
-  .then(() => console.log("✅ SUCCESS! Connected straight to MongoDB Atlas Cloud Database!"))
+  .then(() => console.log("✅ SUCCESS! Cloud Server Connected straight to MongoDB Atlas!"))
   .catch(err => console.error("❌ MongoDB Connection Error: ", err.message));
 
-// Add real URLs here to pull live data instead of example pages
-const targetUrls = [
-  'https://www.bestbuylighting.com.au/products/example-light-1',
-  'https://www.bestbuylighting.com.au/products/example-light-2'
-];
+// Automatically pulls all products using Shopify sitemap indices
+async function discoverAllProducts() {
+  try {
+    console.log("🔍 Extracting product inventory catalog from site architecture...");
+    const response = await axios.get('https://www.bestbuylighting.com.au/sitemap_products_1.xml');
+    
+    const parser = new XMLParser();
+    const jsonObj = parser.parse(response.data);
+    
+    const urls = jsonObj.urlset.url.map(item => item.loc);
+    console.log(`🎯 Auto-discovered ${urls.length} live product links from catalog!`);
+    return urls;
+  } catch (error) {
+    console.error("❌ Failed to auto-pull store sitemap:", error.message);
+    return [];
+  }
+}
 
 app.get('/', async (req, res) => {
   try {
     const alerts = await Product.find({ hasChangedToday: true }).lean();
     const trackedProducts = await Product.find({}).lean();
-
     const inventory = trackedProducts.map(p => ({
       ...p,
       lastUpdatedFormatted: p.lastUpdated ? new Date(p.lastUpdated).toLocaleString('en-AU', { timeZone: 'Australia/Sydney' }) : 'Pending Initial Check'
     }));
-
     res.render('dashboard', { alerts, inventory, totalCount: inventory.length });
   } catch (error) {
     res.status(500).send("Error loading dashboard panel: " + error.message);
   }
 });
 
-setInterval(() => {
-  console.log('Executing routine continuous 24/7 scraper rotation...');
-  trackPrices(targetUrls);
-}, 1000 * 60 * 60 * 2);
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`24/7 Tracker Dashboard running on http://localhost:${PORT}`);
-  trackPrices(targetUrls); 
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, async () => {
+  console.log(`24/7 Cloud Tracker Dashboard initializing on port ${PORT}`);
+  
+  const dynamicUrls = await discoverAllProducts();
+  if (dynamicUrls.length > 0) {
+    console.log("🚀 Initializing complete store scraping cycle...");
+    trackPrices(dynamicUrls);
+  }
 });
