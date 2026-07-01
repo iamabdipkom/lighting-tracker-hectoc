@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const ProductSchema = new mongoose.Schema({
   name: { type: String, required: true },
   url: { type: String, required: true, unique: true },
+  sku: { type: String, default: 'N/A' },
   currentPrice: { type: Number, required: true },
   lastUpdated: { type: Date, default: Date.now },
   hasChangedToday: { type: Boolean, default: false },
