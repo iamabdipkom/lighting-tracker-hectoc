@@ -7,8 +7,9 @@ const { engine } = require('express-handlebars');
 
 // Paths adjusted to find files directly in your main root directory
 const Product = require('./product'); 
-const { trackPrices } = require('./tracker');
+const { trackPrices, syncCatalog } = require('./tracker');
 const { getSitemapUrls } = require('./cronJob');
+const { fetchFullCatalog } = require('./catalog');
 require('./cronJob'); 
 
 const app = express();
@@ -47,23 +48,45 @@ app.listen(PORT, () => {
   runContinuousTrackingLoop();
 });
 
-// Continuously tracks every product on the site. Pulls the full product list
-// from the store's sitemap (not a hardcoded 2-item list), scrapes it with
-// tracker.js's concurrent worker pool, and as soon as one full pass finishes
-// goes straight back to the top of the loop with no delay - so the catalog is
-// being re-checked back-to-back, 24/7, for as long as the server is running.
+const STORE_BASE_URL = 'https://www.bestbuylighting.com.au';
+
+// Continuously tracks every product on the site, and as soon as one full
+// pass finishes goes straight back to the top of the loop with no delay -
+// so the catalog is being re-checked back-to-back, 24/7, for as long as the
+// server is running.
+//
+// Fast path: pull the whole catalog in bulk from Shopify's public
+// /products.json endpoint (catalog.js) and reconcile it in a couple of DB
+// round-trips via tracker.syncCatalog(). No per-product HTTP scraping at
+// all, which is what makes a full lap take seconds/minutes instead of
+// tens of minutes to hours.
+//
+// Fallback: if the bulk endpoint ever fails (blocked, store disables it,
+// network hiccup), fall back to the slower sitemap + per-page HTML scrape
+// so tracking doesn't stop entirely - it just runs at the old, slower pace
+// until the fast path works again on the next lap.
 async function runContinuousTrackingLoop() {
   while (true) {
     try {
-      const urls = await getSitemapUrls();
-      if (urls.length === 0) {
-        console.error('⚠️ Sitemap returned no product URLs - retrying immediately.');
-        continue;
+      const products = await fetchFullCatalog(STORE_BASE_URL);
+      if (products.length === 0) {
+        throw new Error('Bulk catalog endpoint returned 0 products');
       }
-      console.log(`🚀 Starting full catalog scraping cycle for ${urls.length} items...`);
-      await trackPrices(urls);
-    } catch (error) {
-      console.error('❌ Continuous tracking loop error:', error.message);
+      console.log(`🚀 Fast catalog sync: ${products.length} products fetched in bulk.`);
+      await syncCatalog(products);
+    } catch (fastPathError) {
+      console.error(`⚠️ Fast catalog path failed (${fastPathError.message}), falling back to sitemap scrape for this lap.`);
+      try {
+        const urls = await getSitemapUrls();
+        if (urls.length > 0) {
+          console.log(`🐢 Fallback: scraping ${urls.length} product pages individually...`);
+          await trackPrices(urls);
+        } else {
+          console.error('⚠️ Fallback sitemap also returned no product URLs.');
+        }
+      } catch (fallbackError) {
+        console.error('❌ Continuous tracking loop error (both paths failed):', fallbackError.message);
+      }
     }
     // No delay - loop restarts the instant the previous pass finishes.
   }
