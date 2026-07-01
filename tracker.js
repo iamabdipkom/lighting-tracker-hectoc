@@ -62,7 +62,7 @@ async function scrapeOnce(url) {
   const sku = $('meta[property="og:sku"]').attr('content') || null;
 
   if (!name || !priceRaw) {
-    throw new Error('Data point missing from HTML packet structure');
+    throw new Error(`Missing ${!name ? 'title' : ''}${!name && !priceRaw ? '/' : ''}${!priceRaw ? 'price' : ''} on page (not a valid product URL?): ${url}`);
   }
 
   const currentPrice = parseFloat(String(priceRaw).replace(/[^0-9.]/g, ''));
