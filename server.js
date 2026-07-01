@@ -42,10 +42,10 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, async () => {
   console.log(`24/7 Cloud Tracker Dashboard initializing on port ${PORT}`);
   
-  // ✅ BYPASS PATHWAY: Put your exact target store URLs inside this array!
+  // ✅ FIXED: Added your live target product links perfectly here
   const manualUrls = [
-    'https://www.bestbuylighting.com.au/products/domino-3-in-1-led-exhaust-fan-bathroom-heater-3-colors-led-brenton',
-    'https://www.bestbuylighting.com.au/products/fino-ultra-slim-led-exhaust-fan-round-square-trio-color-martec'
+    'https://www.bestbuylighting.com.au/collections/new-arrivals/products/telbix-radam-8-pendant-light',
+    'https://www.bestbuylighting.com.au/products/2483-yoyo-21-light-gold'
   ];
 
   console.log(`🚀 Bypassing sitemap wall. Initializing direct scraping cycle for ${manualUrls.length} items...`);
