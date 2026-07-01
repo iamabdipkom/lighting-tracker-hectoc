@@ -5,8 +5,8 @@ const axios = require('axios');
 const { XMLParser } = require('fast-xml-parser');
 const { engine } = require('express-handlebars');
 
-// Linux Casing Fixes: Lowercase paths to match common file-system uploads safely
-const Product = require('./models/product'); 
+// ✅ FIXED: Path adjusted to find product.js directly in your main root directory
+const Product = require('./product'); 
 const { trackPrices } = require('./tracker');
 require('./cronJob'); 
 
