@@ -1,40 +1,38 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
-// ✅ FIXED: Path adjusted to find product.js directly in your root folder layout
 const Product = require('./product'); 
 
-// Main function to iterate through store links and scrape data points
 async function trackPrices(urls) {
   console.log(`⏱️ Beginning sync loop for ${urls.length} target records...`);
   
   for (const url of urls) {
     try {
-      // Small defensive delay to prevent aggressive rate limiting on the cloud IP
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
-      const response = await axios.get(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-      });
+      // ✅ FIXED: Routes the request through a proxy wrapper to break the store's server block
+      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+      const response = await axios.get(proxyUrl);
       
-      const $ = cheerio.load(response.data);
+      // AllOrigins returns the raw HTML inside a .contents property
+      const htmlContents = response.data.contents;
+      const $ = cheerio.load(htmlContents);
       
-      // Parse structured details out of standard storefront layout wrappers
-      const title = $('.product-meta__title').text().trim() || $('h1').text().trim();
-      const priceRaw = $('.price--highlight').text().trim() || $('.price').text().trim();
-      const sku = $('.product-meta__sku-number').text().trim() || 'N/A';
+      // Updated targeted meta-selectors to reliably extract data points from Shopify layouts
+      const title = $('meta[property="og:title"]').attr('content') || $('h1').text().trim();
+      const priceRaw = $('meta[property="og:price:amount"]').attr('content') || $('.price').text().trim();
+      const sku = $('meta[property="og:sku"]').attr('content') || 'N/A';
       
-      if (!title || !priceRaw) continue;
+      if (!title || !priceRaw) {
+        console.log(`⚠️ Skiped parsing for URL: Data point missing from HTML packet structure.`);
+        continue;
+      }
       
-      // Clean up currency signs and commas to extract a true mathematical decimal
       const numericPrice = parseFloat(priceRaw.replace(/[^0-9.]/g, ''));
+      if (isNaN(numericPrice)) continue;
       
-      // Look for a matching historical document in MongoDB Cluster
       let product = await Product.findOne({ url });
       
       if (!product) {
-        // Build initial inventory baseline for newly discovered items
         product = new Product({
           title,
           url,
@@ -46,29 +44,26 @@ async function trackPrices(urls) {
           lastUpdated: new Date()
         });
         await product.save();
-        console.log(`🆕 Registered baseline catalog item: "${title.substring(0, 30)}..." at $${numericPrice}`);
+        console.log(`🆕 SUCCESS! Registered item to database: "${title.substring(0, 30)}..." at $${numericPrice}`);
       } else {
-        // Run comparison matrices against the existing cloud data record
         if (numericPrice !== product.currentPrice) {
-          console.log(`🚨 PRICE DRIFT DETECTED for "${title.substring(0, 30)}...": $${product.currentPrice} -> $${numericPrice}`);
-          
+          console.log(`🚨 PRICE SHIFT: $${product.currentPrice} -> $${numericPrice}`);
           product.priceHistory.push({ price: numericPrice, date: new Date() });
           product.currentPrice = numericPrice;
           product.hasChangedToday = true;
           product.lastUpdated = new Date();
           await product.save();
         } else {
-          // Document checked, price stable
           product.hasChangedToday = false;
           product.lastUpdated = new Date();
           await product.save();
         }
       }
     } catch (error) {
-      console.error(`⚠️ Edge node bypass failed for URL: ${url.substring(0, 40)}... - ${error.message}`);
+      console.error(`❌ Scraping bypass pipeline failed: ${error.message}`);
     }
   }
-  console.log("🏁 Cycle complete! Cloud tracking matrix idling until next interval.");
+  console.log("🏁 Cycle complete! Cloud database records updated.");
 }
 
 module.exports = { trackPrices };
