@@ -8,6 +8,7 @@ const { engine } = require('express-handlebars');
 // Paths adjusted to find files directly in your main root directory
 const Product = require('./product'); 
 const { trackPrices } = require('./tracker');
+const { getSitemapUrls } = require('./cronJob');
 require('./cronJob'); 
 
 const app = express();
@@ -39,17 +40,31 @@ app.get('/', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, async () => {
+app.listen(PORT, () => {
   console.log(`24/7 Cloud Tracker Dashboard initializing on port ${PORT}`);
-  
-  // Verified live product URLs (the old ones 404'd: the Radam link had a stale
-  // "/collections/new-arrivals/" prefix in front of "/products/", and product
-  // id 2483 for the Yoyo light doesn't exist - the real id is 2475).
-  const manualUrls = [
-    'https://www.bestbuylighting.com.au/products/telbix-radam-8-pendant-light',
-    'https://www.bestbuylighting.com.au/products/2475-yoyo-1-light-gold'
-  ];
-
-  console.log(`🚀 Bypassing sitemap wall. Initializing direct scraping cycle for ${manualUrls.length} items...`);
-  trackPrices(manualUrls);
+  // Fire-and-forget: the loop below runs for the life of the process,
+  // independently of the request/response cycle.
+  runContinuousTrackingLoop();
 });
+
+// Continuously tracks every product on the site. Pulls the full product list
+// from the store's sitemap (not a hardcoded 2-item list), scrapes it with
+// tracker.js's concurrent worker pool, and as soon as one full pass finishes
+// goes straight back to the top of the loop with no delay - so the catalog is
+// being re-checked back-to-back, 24/7, for as long as the server is running.
+async function runContinuousTrackingLoop() {
+  while (true) {
+    try {
+      const urls = await getSitemapUrls();
+      if (urls.length === 0) {
+        console.error('⚠️ Sitemap returned no product URLs - retrying immediately.');
+        continue;
+      }
+      console.log(`🚀 Starting full catalog scraping cycle for ${urls.length} items...`);
+      await trackPrices(urls);
+    } catch (error) {
+      console.error('❌ Continuous tracking loop error:', error.message);
+    }
+    // No delay - loop restarts the instant the previous pass finishes.
+  }
+}
