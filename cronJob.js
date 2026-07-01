@@ -1,93 +1,70 @@
 const cron = require('node-cron');
 const nodemailer = require('nodemailer');
-const createCsvWriter = require('csv-writer').createObjectCsvWriter;
-const path = require('path');
-const fs = require('fs');
-const Product = require('./models/Product');
+// ✅ FIXED: Path adjusted to find product.js directly in your root folder layout
+const Product = require('./product'); 
+const { trackPrices } = require('./tracker');
+const axios = require('axios');
+const { XMLParser } = require('fast-xml-parser');
 
-cron.schedule('0 0 * * *', async () => {
-  console.log('Executing automated Midnight report sequence...');
-  
+// Automatically pulls store sitemap items for the scheduled cron cycles
+async function getSitemapUrls() {
   try {
-    const changedProducts = await Product.find({ hasChangedToday: true });
+    const response = await axios.get('https://www.bestbuylighting.com.au/sitemap_products_1.xml');
+    const parser = new XMLParser();
+    const jsonObj = parser.parse(response.data);
+    return jsonObj.urlset.url.map(item => item.loc);
+  } catch (error) {
+    console.error("❌ Cron sitemap pull failed:", error.message);
+    return [];
+  }
+}
 
-    if (changedProducts.length === 0) {
-      console.log('No competitor price adjustments today.');
-      return;
+// Configures automated background email alerting dispatch engine
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
+});
+
+// Scheduled cron cycle: Executes every single day at midnight (00:00)
+cron.schedule('0 0 * * *', async () => {
+  console.log("⏰ Scheduled midnight database audit and price verification cycle spinning up...");
+  
+  const urls = await getSitemapUrls();
+  if (urls.length > 0) {
+    // Execute full catalog update scanning sequence
+    await trackPrices(urls);
+    
+    try {
+      // Gather any items that registered a price variation flag during the loop
+      const changedProducts = await Product.find({ hasChangedToday: true }).lean();
+      
+      if (changedProducts.length > 0) {
+        let emailContent = '<h3>🚨 Price Shift Discovered for Tracked Catalog Items</h3><ul>';
+        changedProducts.forEach(p => {
+          emailContent += `<li><strong>${p.title}</strong> has updated. New Price: $${p.currentPrice}. <a href="${p.url}">View Item</a></li>`;
+        });
+        emailContent += '</ul>';
+        
+        await transporter.sendMail({
+          from: process.env.EMAIL_USER,
+          to: process.env.REPORT_EMAILS,
+          subject: `🛒 Price Alert Update: ${changedProducts.length} Changes Detected!`,
+          html: emailContent
+        });
+        console.log("📩 Automated daily variation digests dispatched to target email inbox vectors.");
+      } else {
+        console.log("🧘 Audit complete. No item changes found today. Email dispatch suppressed.");
+      }
+    } catch (emailError) {
+      console.error("❌ Failed to compile or send cron daily alert email:", emailError.message);
     }
-
-    const dateStr = new Date().toISOString().slice(0, 10);
-    const fileName = `price_report_${dateStr}.csv`;
-    const reportsDir = path.join(__dirname, 'reports');
-    const filePath = path.join(reportsDir, fileName);
-
-    if (!fs.existsSync(reportsDir)){
-        fs.mkdirSync(reportsDir);
-    }
-
-    const csvWriter = createCsvWriter({
-      path: filePath,
-      header: [
-        {id: 'name', title: 'Product Name'},
-        {id: 'url', title: 'Product Link'},
-        {id: 'previousPrice', title: 'Old Price'},
-        {id: 'currentPrice', title: 'New Price'},
-        {id: 'time', title: 'Change Log Timestamp'}
-      ]
-    });
-
-    const records = changedProducts.map(p => ({
-      name: p.name,
-      url: p.url,
-      previousPrice: `$${p.previousPrice}`,
-      currentPrice: `$${p.currentPrice}`,
-      time: p.priceChangedAt.toLocaleString('en-AU', { timeZone: 'Australia/Sydney' })
-    }));
-
-    await csvWriter.writeRecords(records);
-
-    let transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
-    });
-
-    await transporter.sendMail({
-      from: `"Store Price Monitor" <${process.env.EMAIL_USER}>`,
-      to: process.env.REPORT_EMAILS,
-      subject: `🚨 Best Buy Lighting Price Alterations - ${dateStr}`,
-      text: 'Attached is the system CSV file tracking competitor price movements over the last 24 hours.',
-      attachments: [{ filename: fileName, path: filePath }]
-    });
-
-    // Clear dashboard visual data for the new day
-    await Product.updateMany({ hasChangedToday: true }, { hasChangedToday: false });
-    console.log('Dashboard items purged. System reset complete.');
-
-    // Enforce strict 7-day retention rule
-    cleanOldReports();
-
-  } catch (err) {
-    console.error('Automation error:', err);
   }
 }, {
   scheduled: true,
   timezone: "Australia/Sydney"
 });
 
-function cleanOldReports() {
-  const reportsDir = path.join(__dirname, 'reports');
-  fs.readdir(reportsDir, (err, files) => {
-    if (err) return;
-    files.forEach(file => {
-      const filePath = path.join(reportsDir, file);
-      const stat = fs.statSync(filePath);
-      const now = new Date().getTime();
-      const expirationTime = new Date(stat.ctime).getTime() + (7 * 24 * 60 * 60 * 1000); 
-
-      if (now > expirationTime) {
-        fs.unlinkSync(filePath);
-        console.log(`[Storage Cleanup] Deleted 7-day old spreadsheet: ${file}`);
-      }
-    });
-  });
-}
+console.log("⏰ Background cron schedule verified and running in Australia/Sydney time.");
