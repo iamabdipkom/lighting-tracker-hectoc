@@ -74,7 +74,7 @@ cron.schedule('0 0 * * *', async () => {
       if (changedProducts.length > 0) {
         let emailContent = '<h3>🚨 Price Shift Discovered for Tracked Catalog Items</h3><ul>';
         changedProducts.forEach(p => {
-          emailContent += `<li><strong>${p.title}</strong> has updated. New Price: $${p.currentPrice}. <a href="${p.url}">View Item</a></li>`;
+          emailContent += `<li><strong>${p.name}</strong> has updated. New Price: $${p.currentPrice}. <a href="${p.url}">View Item</a></li>`;
         });
         emailContent += '</ul>';
         
@@ -92,9 +92,27 @@ cron.schedule('0 0 * * *', async () => {
       console.error("❌ Failed to compile or send cron daily alert email:", emailError.message);
     }
   }
+
+  await resetDailyChangeFlags();
 }, {
   scheduled: true,
   timezone: "Australia/Sydney"
 });
 
 console.log("⏰ Background cron schedule verified and running in Australia/Sydney time.");
+
+// Reset the "changed today" flag for the whole catalog once daily, right after
+// the audit + email above. tracker.js's continuous loop only ever flips this
+// flag to true on a real price change and never resets it itself (so it can
+// run every few minutes all day without wiping earlier same-day alerts) -
+// this cron job is the one place that clears it, giving a clean slate per day.
+async function resetDailyChangeFlags() {
+  try {
+    const result = await Product.updateMany({}, { $set: { hasChangedToday: false } });
+    console.log(`🧹 Daily reset: cleared hasChangedToday on ${result.modifiedCount} products.`);
+  } catch (error) {
+    console.error('❌ Failed to reset daily change flags:', error.message);
+  }
+}
+
+module.exports = { getSitemapUrls, resetDailyChangeFlags };
