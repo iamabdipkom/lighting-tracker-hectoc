@@ -2,9 +2,12 @@ const cron = require('node-cron');
 const nodemailer = require('nodemailer');
 // ✅ FIXED: Path adjusted to find product.js directly in your root folder layout
 const Product = require('./product'); 
-const { trackPrices } = require('./tracker');
+const { trackPrices, syncCatalog } = require('./tracker');
+const { fetchFullCatalog } = require('./catalog');
 const axios = require('axios');
 const { XMLParser } = require('fast-xml-parser');
+
+const STORE_BASE_URL = 'https://www.bestbuylighting.com.au';
 
 // Automatically pulls store sitemap items for the scheduled cron cycles.
 // Shopify stores publish a top-level sitemap INDEX at /sitemap.xml that links out
@@ -75,12 +78,27 @@ const transporter = nodemailer.createTransport({
 // Scheduled cron cycle: Executes every single day at midnight (00:00)
 cron.schedule('0 0 * * *', async () => {
   console.log("⏰ Scheduled midnight database audit and price verification cycle spinning up...");
-  
-  const urls = await getSitemapUrls();
-  if (urls.length > 0) {
-    // Execute full catalog update scanning sequence
-    await trackPrices(urls);
-    
+
+  let ranOk = false;
+  try {
+    const products = await fetchFullCatalog(STORE_BASE_URL);
+    if (products.length > 0) {
+      await syncCatalog(products);
+      ranOk = true;
+    }
+  } catch (fastPathError) {
+    console.error(`⚠️ Midnight audit fast path failed (${fastPathError.message}), falling back to sitemap scrape.`);
+  }
+
+  if (!ranOk) {
+    const urls = await getSitemapUrls();
+    if (urls.length > 0) {
+      await trackPrices(urls);
+      ranOk = true;
+    }
+  }
+
+  if (ranOk) {
     try {
       // Gather any items that registered a price variation flag during the loop
       const changedProducts = await Product.find({ hasChangedToday: true }).lean();
