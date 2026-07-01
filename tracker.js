@@ -157,4 +157,78 @@ async function trackPrices(urls) {
   console.log(`🏁 Cycle complete! ${completed} updated, ${failed} failed.`);
 }
 
-module.exports = { trackPrices };
+// Reconciles a batch of already-fetched product data (name/url/sku/price)
+// against MongoDB. Unlike trackPrices(), this does NO network scraping per
+// product - it assumes the data was already pulled in bulk (e.g. from
+// catalog.js's /products.json fetch) and just needs to be diffed against
+// what's stored. That turns "thousands of HTTP requests" into "handful of
+// HTTP requests + 2-3 database round-trips", regardless of catalog size.
+async function syncCatalog(products) {
+  console.log(`⏱️ Syncing ${products.length} products from catalog snapshot...`);
+
+  const urls = products.map(p => p.url);
+  const existingDocs = await Product.find({ url: { $in: urls } }).lean();
+  const existingByUrl = new Map(existingDocs.map(doc => [doc.url, doc]));
+
+  const toInsert = [];
+  const bulkUpdateOps = [];
+  let changedCount = 0;
+
+  for (const { name, url, sku, currentPrice } of products) {
+    const existing = existingByUrl.get(url);
+
+    if (!existing) {
+      toInsert.push({
+        name,
+        url,
+        sku: sku || 'N/A',
+        currentPrice,
+        previousPrice: null,
+        hasChangedToday: false,
+        lastUpdated: new Date(),
+        priceHistory: [{ price: currentPrice, date: new Date() }]
+      });
+      continue;
+    }
+
+    if (currentPrice !== existing.currentPrice) {
+      changedCount++;
+      console.log(`🚨 PRICE SHIFT [${name.substring(0, 30)}]: $${existing.currentPrice} -> $${currentPrice}`);
+      bulkUpdateOps.push({
+        updateOne: {
+          filter: { url },
+          update: {
+            $set: {
+              name,
+              sku: sku || 'N/A',
+              previousPrice: existing.currentPrice,
+              currentPrice,
+              hasChangedToday: true,
+              priceChangedAt: new Date(),
+              lastUpdated: new Date()
+            },
+            $push: { priceHistory: { price: currentPrice, date: new Date() } }
+          }
+        }
+      });
+    } else {
+      bulkUpdateOps.push({
+        updateOne: {
+          filter: { url },
+          update: { $set: { name, sku: sku || 'N/A', lastUpdated: new Date() } }
+        }
+      });
+    }
+  }
+
+  if (toInsert.length > 0) {
+    await Product.insertMany(toInsert, { ordered: false });
+  }
+  if (bulkUpdateOps.length > 0) {
+    await Product.bulkWrite(bulkUpdateOps, { ordered: false });
+  }
+
+  console.log(`🏁 Catalog sync complete! ${toInsert.length} new, ${changedCount} changed, ${bulkUpdateOps.length - changedCount} unchanged.`);
+}
+
+module.exports = { trackPrices, syncCatalog };
