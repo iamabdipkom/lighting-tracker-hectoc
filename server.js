@@ -121,7 +121,21 @@ const CYCLE_DELAY_MS = parseInt(process.env.CYCLE_DELAY_MS, 10) || 5000;
 // so tracking doesn't stop entirely - it just runs at the old, slower pace
 // until the fast path works again on the next lap.
 async function runContinuousTrackingLoop() {
+  // Tracks consecutive fully-failed passes (both fast path AND fallback
+  // failed to update anything). A single 429 recovering via retry is fine
+  // and doesn't count here - this is specifically for "the whole cycle
+  // produced nothing." Repeatedly retrying a site that's actively rate
+  // limiting us every 5 seconds is what looked like it was making things
+  // worse rather than letting the block clear - so each consecutive total
+  // failure doubles the wait, up to a 2 minute cap, and resets back to the
+  // normal pace the moment a pass succeeds again.
+  let consecutiveFailures = 0;
+  const BASE_DELAY_MS = CYCLE_DELAY_MS;
+  const MAX_BACKOFF_MS = 2 * 60 * 1000;
+
   while (true) {
+    let passSucceeded = false;
+
     try {
       const products = await fetchFullCatalog(STORE_BASE_URL);
       if (products.length === 0) {
@@ -129,6 +143,7 @@ async function runContinuousTrackingLoop() {
       }
       console.log(`🚀 Fast catalog sync: ${products.length} products fetched in bulk.`);
       await syncCatalog(products);
+      passSucceeded = true;
     } catch (fastPathError) {
       console.error(`⚠️ Fast catalog path failed (${fastPathError.message}), falling back to sitemap scrape for this lap.`);
       try {
@@ -136,6 +151,7 @@ async function runContinuousTrackingLoop() {
         if (urls.length > 0) {
           console.log(`🐢 Fallback: scraping ${urls.length} product pages individually...`);
           await trackPrices(urls);
+          passSucceeded = true;
         } else {
           console.error('⚠️ Fallback sitemap also returned no product URLs.');
         }
@@ -143,6 +159,15 @@ async function runContinuousTrackingLoop() {
         console.error('❌ Continuous tracking loop error (both paths failed):', fallbackError.message);
       }
     }
-    await new Promise(resolve => setTimeout(resolve, CYCLE_DELAY_MS));
+
+    if (passSucceeded) {
+      consecutiveFailures = 0;
+      await new Promise(resolve => setTimeout(resolve, BASE_DELAY_MS));
+    } else {
+      consecutiveFailures++;
+      const backoffMs = Math.min(BASE_DELAY_MS * (2 ** consecutiveFailures), MAX_BACKOFF_MS);
+      console.error(`⏳ Full pass failed (${consecutiveFailures} in a row) - backing off ${Math.round(backoffMs / 1000)}s before retrying.`);
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
+    }
   }
 }
