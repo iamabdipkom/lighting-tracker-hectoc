@@ -4,11 +4,13 @@ const https = require('https');
 const cheerio = require('cheerio');
 const Product = require('./product');
 
-// How many products we scrape in parallel. This is the main speed lever:
-// the old code did everything one-at-a-time with fixed sleeps between each
-// request, so total time was ~5s * number of products. Raise/lower via env
-// if the site starts throwing 429s/403s at a given concurrency.
-const CONCURRENCY = parseInt(process.env.SCRAPE_CONCURRENCY, 10) || 10;
+// How many products we scrape in parallel. This only matters for the slow
+// per-page HTML fallback path (the fast bulk /products.json path in
+// catalog.js doesn't use this at all). Kept modest on purpose: this path
+// hits the store hundreds/thousands of times in a row, and going too high
+// is what gets an IP rate-limited (429) or blocked outright - which then
+// makes everything slower, not faster. Raise/lower via env if needed.
+const CONCURRENCY = parseInt(process.env.SCRAPE_CONCURRENCY, 10) || 6;
 
 // Reused, keep-alive connections instead of a fresh TCP+TLS handshake per
 // request - this alone removes a large chunk of per-request latency when
@@ -24,11 +26,16 @@ const BROWSER_HEADERS = {
 
 const REQUEST_TIMEOUT_MS = 10000;
 
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
 // Fetches raw HTML for a product page. Tries a direct request first (fast,
-// reuses the keep-alive pool). Only falls back to the AllOrigins proxy if
-// the direct request is blocked - the proxy is a free third-party service
-// and is noticeably slower and flakier, so it's a fallback, not the default.
-async function fetchHtml(url) {
+// reuses the keep-alive pool). On a 429 (rate limited), backs off and
+// retries the direct request rather than immediately treating it as a
+// failure - a 429 means "slow down", not "this page is broken". Only falls
+// back to the AllOrigins proxy for non-429 failures, since the proxy is a
+// free third-party service and is noticeably slower and flakier, so it's a
+// last resort, not the default.
+async function fetchHtml(url, attempt = 1) {
   try {
     const direct = await axios.get(url, {
       headers: BROWSER_HEADERS,
@@ -38,6 +45,14 @@ async function fetchHtml(url) {
     });
     return direct.data;
   } catch (directError) {
+    const status = directError.response?.status;
+    if (status === 429 && attempt < 4) {
+      const retryAfterHeader = directError.response.headers['retry-after'];
+      const waitMs = retryAfterHeader ? parseInt(retryAfterHeader, 10) * 1000 : attempt * 1500;
+      console.log(`⏳ Rate limited (429) on ${url}, waiting ${waitMs}ms before retry ${attempt}/3...`);
+      await sleep(waitMs);
+      return fetchHtml(url, attempt + 1);
+    }
     const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
     const proxied = await axios.get(proxyUrl, {
       timeout: REQUEST_TIMEOUT_MS,
