@@ -40,13 +40,56 @@ app.get('/', async (req, res) => {
   }
 });
 
+// Lightweight health/keep-alive endpoint - deliberately does no DB work,
+// just proves the process is alive and responds fast to Render's health
+// checks even while a heavy scraping pass is in progress.
+app.get('/health', (req, res) => res.status(200).send('ok'));
+
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`24/7 Cloud Tracker Dashboard initializing on port ${PORT}`);
   // Fire-and-forget: the loop below runs for the life of the process,
   // independently of the request/response cycle.
   runContinuousTrackingLoop();
+  startSelfPingKeepAlive();
 });
+
+// Render's free web service tier spins the whole process down after ~15
+// minutes with no inbound HTTP request - and when it does, the tracking
+// loop above dies with it, which is exactly the "stops when the tab
+// closes" symptom (an open tab was occasionally generating requests that
+// happened to reset that timer). A request from the app to its own public
+// URL counts as inbound traffic just the same as a browser visit does, so
+// pinging ourselves periodically keeps the service warm without needing
+// anyone to keep a tab open.
+//
+// Render automatically provides RENDER_EXTERNAL_URL as an env var on
+// deployed services, so this needs no manual configuration.
+//
+// IMPORTANT: this only works on the free tier's terms - it's a workaround
+// for the spin-down behaviour, not a fix for actual crashes (OOM, unhandled
+// exceptions). If the service is still dying with a "deployment failed"
+// notification even with this running, that's a separate, real crash and
+// this won't mask it - upgrading to a paid instance (or moving the tracker
+// to a Background Worker service) remains the properly correct fix for a
+// genuinely 24/7 process.
+function startSelfPingKeepAlive() {
+  const selfUrl = process.env.RENDER_EXTERNAL_URL;
+  if (!selfUrl) {
+    console.log('ℹ️ RENDER_EXTERNAL_URL not set (not running on Render, or not yet available) - skipping self-ping.');
+    return;
+  }
+
+  const PING_INTERVAL_MS = 10 * 60 * 1000; // well under Render's 15-minute idle timeout
+  setInterval(async () => {
+    try {
+      await axios.get(`${selfUrl}/health`, { timeout: 10000 });
+      console.log('💓 Self-ping keep-alive OK.');
+    } catch (error) {
+      console.error('⚠️ Self-ping keep-alive failed:', error.message);
+    }
+  }, PING_INTERVAL_MS);
+}
 
 const STORE_BASE_URL = 'https://www.bestbuylighting.com.au';
 
