@@ -9,7 +9,7 @@ const MAX_RETRIES = 5;
 // tripping the store's rate limiter in the first place - going full-speed
 // with zero pacing is exactly what produced the 429s. A few hundred ms per
 // page is negligible against a handful of total requests.
-const PAGE_DELAY_MS = parseInt(process.env.CATALOG_PAGE_DELAY_MS, 10) || 400;
+const PAGE_DELAY_MS = parseInt(process.env.CATALOG_PAGE_DELAY_MS, 10) || 800;
 
 const keepAliveHttpAgent = new http.Agent({ keepAlive: true });
 const keepAliveHttpsAgent = new https.Agent({ keepAlive: true });
