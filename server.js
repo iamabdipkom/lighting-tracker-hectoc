@@ -51,15 +51,27 @@ app.listen(PORT, () => {
 const STORE_BASE_URL = 'https://www.bestbuylighting.com.au';
 
 // Continuously tracks every product on the site, and as soon as one full
-// pass finishes goes straight back to the top of the loop with no delay -
-// so the catalog is being re-checked back-to-back, 24/7, for as long as the
+// pass finishes goes back to the top of the loop after a short pause - so
+// the catalog is being re-checked continuously, 24/7, for as long as the
 // server is running.
 //
+// NOTE ON THE DELAY: this used to be zero-delay ("restart the instant the
+// previous pass finishes"). In practice that's what triggered the 429
+// (rate limited) responses from the store's /products.json endpoint - the
+// loop was re-hitting it again the instant it finished, with no break at
+// all. A 429 forces a fallback to the much slower per-page scrape, which
+// then hammers the store even harder and can saturate the process enough
+// that Render's own health check stops getting a response (the "No open
+// HTTP ports detected" messages). A short, bounded pause here is what
+// actually keeps this fast and stable, rather than caught in a
+// rate-limit -> slow-fallback -> unresponsive loop.
+const CYCLE_DELAY_MS = parseInt(process.env.CYCLE_DELAY_MS, 10) || 5000;
+
 // Fast path: pull the whole catalog in bulk from Shopify's public
 // /products.json endpoint (catalog.js) and reconcile it in a couple of DB
 // round-trips via tracker.syncCatalog(). No per-product HTTP scraping at
-// all, which is what makes a full lap take seconds/minutes instead of
-// tens of minutes to hours.
+// all, which is what makes a full lap take seconds instead of tens of
+// minutes to hours.
 //
 // Fallback: if the bulk endpoint ever fails (blocked, store disables it,
 // network hiccup), fall back to the slower sitemap + per-page HTML scrape
@@ -88,6 +100,6 @@ async function runContinuousTrackingLoop() {
         console.error('❌ Continuous tracking loop error (both paths failed):', fallbackError.message);
       }
     }
-    // No delay - loop restarts the instant the previous pass finishes.
+    await new Promise(resolve => setTimeout(resolve, CYCLE_DELAY_MS));
   }
 }
